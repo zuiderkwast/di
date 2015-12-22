@@ -1,0 +1,8 @@
+*.o
+Makefile.deps
+a.out
+dlc
+json-dump
+json-test
+pcre-test
+di-test
