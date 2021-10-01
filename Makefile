@@ -1,3 +1,5 @@
+# apt install libyajl-dev
+
 CFLAGS += -Wall -std=c99 -pedantic
 LDFLAGS += -lyajl -lpcre
 
