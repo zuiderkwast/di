@@ -1,4 +1,4 @@
 case foo of {
-	"brännvin" -> 42;
+	"br\u00e4nnvin" -> 42;
 	false -> 0.1;
 	/^\w(\d+)/ -> $1}

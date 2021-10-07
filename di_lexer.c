@@ -6,7 +6,6 @@
 #include <assert.h>
 #include <stdio.h>
 #include "di.h"
-#include "json.h"
 #include "di.h"
 #include "di_lexer.h"
 #include "di_debug.h"
@@ -27,6 +26,123 @@ static void check_pcre_compile_flags(void) {
 
 /* --------- end of probing code ---------- */
 
+static di_t parse_int(const char *subject, int length) {
+    (void)length;
+    int val;
+    assert(sscanf(subject, "%d", &val));
+    return di_from_int(val);
+}
+
+static di_t parse_double(const char *subject, int length) {
+    (void)length;
+    double val;
+    assert(sscanf(subject, "%lf", &val));
+    return di_from_double(val);
+}
+
+static di_t parse_number(const char *subject, int length) {
+    for (int i = 0; i < length; i++)
+        if (subject[i] == '.' || subject[i] == 'e' || subject[i] == 'E')
+            return parse_double(subject, length);
+    return parse_int(subject, length);
+}
+
+/* Code point <-> UTF-8 conversion
+   First   Last     Byte 1   Byte 2   Byte 3   Byte 4
+   U+0000  U+007F   0xxxxxxx
+   U+0080  U+07FF   110xxxxx 10xxxxxx
+   U+0800  U+FFFF   1110xxxx 10xxxxxx 10xxxxxx
+   U+10000 U+10FFFF 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx */
+
+static int utf8_cp_length(unsigned codepoint) {
+    if (codepoint <= 0x7f) return 1;
+    if (codepoint <= 0x7ff) return 2;
+    if (codepoint <= 0xffff) return 3;
+    return 4;
+}
+
+// UTF-8 encodes a single code point. Writes the UTF-8 bytes to dst and returns
+// the number of bytes written.
+static int utf8_cp_encode(unsigned cp, char *dst) {
+    if (cp <= 0x7f) {
+        dst[0] = (char)cp;
+        return 1;
+    } else if (cp <= 0x7ff) {
+        dst[0] = (char)(0xc0 | ((cp >> 6) & 0x1f));
+        dst[1] = (char)(0x80 | (cp & 0x3f));
+        return 2;
+    } else if (cp <= 0xffff) {
+        dst[0] = (char)(0xe0 | ((cp >> 12) & 0x0f));
+        dst[1] = (char)(0x80 | ((cp >> 6) & 0x3f));
+        dst[2] = (char)(0x80 | (cp & 0x3f));
+        return 3;
+    } else {
+        dst[0] = (char)(0xf0 | ((cp >> 18) & 0x07));
+        dst[1] = (char)(0x80 | ((cp >> 12) & 0x3f));
+        dst[2] = (char)(0x80 | ((cp >> 6) & 0x3f));
+        dst[2] = (char)(0x80 | (cp & 0x3f));
+        return 4;
+    }
+}
+
+// Parses a string literal
+// TODO: Replace assert with error report.
+static di_t parse_string(const char *subject, int length) {
+    // Get rid of surrounding quotes
+    subject++;
+    length -= 2;
+    // Compute length
+    int len = 0;
+    int i = 0;
+    while (i < length) {
+        if (subject[i++] == '\\') {
+            if (subject[i++] == 'u') {
+                assert(i + 3 < length); // at least 4 chars left
+                unsigned codepoint;
+                int n;
+                assert(sscanf(&subject[i], "%4x%n", &codepoint, &n) == 1);
+                assert(n == 4);               /* exactly 4 bytes were read */
+                assert(codepoint <= 0x10fff); /* basic validation */
+                len += utf8_cp_length(codepoint);
+                i += 4;                       /* skip the 4 hex chars */
+                continue;
+            }
+        }
+        len++;
+    }
+
+    // allocate and populate
+    di_t str = di_string_create_presized(len);
+    char *chars = di_string_chars(str);
+    i = 0;
+    int j = 0;
+    while (i < length) {
+        if (subject[i] == '\\') {
+            // Escapes: \" \\ \/ \b \f \n \r \t \uHHHH
+            switch (subject[++i]) {
+            case 'u':
+                i++; // skip the u
+                unsigned codepoint;
+                assert(sscanf(&subject[i], "%4x", &codepoint) == 1);
+                j += utf8_cp_encode(codepoint, &chars[j]);
+                i += 4; // skip the hex chars
+                break;
+            case 'b': chars[j++] = '\b'; i++; break;
+            case 'f': chars[j++] = '\f'; i++; break;
+            case 'n': chars[j++] = '\n'; i++; break;
+            case 'r': chars[j++] = '\r'; i++; break;
+            case 't': chars[j++] = '\t'; i++; break;
+            default:
+                // Actually only '"', '\\' and '/' for JSON
+                chars[j++] = subject[i++];
+            }
+        } else {
+            chars[j++] = subject[i++];
+        }
+    }
+    assert(j == len);
+    return str;
+}
 
 static pcre *word_re = NULL, *operator_re, *div_re, *regex_re, *string_re,
     *num_re, *nl_re, *spaces_re;
@@ -182,9 +298,8 @@ di_t di_lex(di_t * lexer_ptr, di_t old_token, bool accept_regex) {
     die_on_prce_error(rc);
     if (rc > 0) {
         op = di_string_from_cstring("lit");
-        data = di_string_from_chars(subject + start,
-                                    ovector[1] - ovector[0]);
-        data = json_decode(data);
+        data = parse_number(subject + start,
+                            ovector[1] - ovector[0]);
         goto found;
     }
 
@@ -192,9 +307,8 @@ di_t di_lex(di_t * lexer_ptr, di_t old_token, bool accept_regex) {
     die_on_prce_error(rc);
     if (rc > 0) {
         op = di_string_from_cstring("lit");
-        data = di_string_from_chars(subject + start,
-                                    ovector[1] - ovector[0]);
-        data = json_decode(data);
+        data = parse_string(subject + start,
+                            ovector[1] - ovector[0]);
         goto found;
     }
 

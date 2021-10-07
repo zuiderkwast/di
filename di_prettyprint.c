@@ -1,8 +1,110 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include "di.h"
-#include "json.h"
 #include "di_prettyprint.h"
+
+#define STEP 2 /* indentation per level */
+
+/* Value to source code. Does not free value. */
+di_t di_to_source(di_t value, int indent) {
+    if (di_is_int(value)) {
+        char buf[32];
+        snprintf(buf, 32, "%d", di_to_int(value));
+        return di_string_from_cstring(buf);
+    } else if (di_is_double(value)) {
+        char buf[50];
+        snprintf(buf, 50, "%f", di_to_double(value));
+        return di_string_from_cstring(buf);
+    } else if (di_is_string(value)) {
+        char *chars = di_string_chars(value);
+        di_size_t length = di_string_length(value);
+        // compute literal length;
+        di_size_t len = 2; // enclosing quotes
+        for (di_size_t i = 0; i < length; i++) {
+            char c = chars[i];
+            // Escapes: \" \\ \/ \b \f \n \r \t \uHHHH
+            if (c == '"' || c == '\\' || c == '/' || c == '\b' || c == '\f' ||
+                c == '\n' || c == '\r' || c == '\t') len += 2;
+            else len++;
+        }
+        di_t lit_str = di_string_create_presized(len);
+        char *lit = di_string_chars(lit_str);
+        lit[0] = lit[len - 1] = '"'; // enclosing quotes
+        di_size_t j = 1;             // position in lit
+        for (di_size_t i = 0; i < length; i++) {
+            char c = chars[i];
+            // Escapes: \" \\ \/ \b \f \n \r \t \uHHHH.
+            // We don't generate \uHHHH escapes. Plain UTF-8 is fine.
+            if (c == '"' || c == '\\' || c == '/' || c == '\b' || c == '\f' ||
+                c == '\n' || c == '\r' || c == '\t') {
+                lit[j++] = '\\';
+                switch (chars[i]) {
+                case '\b': lit[j++] = 'b'; break;
+                case '\f': lit[j++] = 'f'; break;
+                case '\n': lit[j++] = 'n'; break;
+                case '\r': lit[j++] = 'r'; break;
+                case '\t': lit[j++] = 't'; break;
+                default: lit[j++] = chars[i];
+                }
+            } else {
+                lit[j++] = chars[i];
+            }
+        }
+        return lit_str;
+    } else if (di_is_null(value)) {
+        return di_string_from_cstring("null");
+    } else if (di_is_false(value)) {
+        return di_string_from_cstring("false");
+    } else if (di_is_true(value)) {
+        return di_string_from_cstring("true");
+    } else if (di_is_array(value)) {
+        int n = di_array_length(value);
+        if (n == 0)
+            return di_string_from_cstring("[]");
+        di_t str = di_string_from_cstring("[\n");
+        char buf[80];
+        snprintf(buf, 80, "%*s", indent + STEP, "");
+        for (int i = 0; i < n; i++) {
+            str = di_string_append_chars(str, buf, strlen(buf));
+            di_t elem = di_array_get(value, i);
+            str = di_string_concat(str, di_to_source(elem, indent + STEP));
+            if (i < n - 1)
+                str = di_string_append_chars(str, ",", 1);
+            str = di_string_append_chars(str, "\n", 1);
+        }
+        snprintf(buf, 80, "%*s]", indent, "");
+        str = di_string_append_chars(str, buf, strlen(buf));
+        return str;
+    } else if (di_is_dict(value)) {
+        di_size_t n = di_dict_size(value);
+        if (n == 0)
+            return di_string_from_cstring("{}");
+        di_t str = di_string_from_cstring("{\n");
+        di_size_t cursor = 0, i = 0;
+        di_t k, v;
+        char buf[80];
+        snprintf(buf, 80, "%*s", indent + STEP, "");
+        while ((cursor = di_dict_iter(value, cursor, &k, &v)) != 0) {
+            str = di_string_append_chars(str, buf, strlen(buf));
+            di_t keystr = di_to_source(k, indent + STEP);
+            str = di_string_concat(str, keystr);
+            str = di_string_append_chars(str, ": ", 2);
+            str = di_string_concat(str, di_to_source(v, indent + STEP));
+            if (i++ < n - 1)
+                str = di_string_append_chars(str, ",", 1);
+            str = di_string_append_chars(str, "\n", 1);
+        }
+        snprintf(buf, 80, "%*s}", indent, "");
+        str = di_string_append_chars(str, buf, strlen(buf));
+        return str;
+    }
+    assert(0); // not implemented for any other types
+    return di_null();
+}
+
+static inline di_t pp_literal(di_t value) {
+    return di_to_source(value, 0);
+}
 
 // just a shorter name for di_string_from_cstring
 static inline di_t s(char * const cstring) {
@@ -48,7 +150,7 @@ static void pattern(di_t pp, di_t p, int indent) {
     di_t op = di_dict_get(p, s("pat"));
     if (di_equal(op, s("lit"))) {
         di_t v = di_dict_get(p, s("value"));
-        di_t src = json_encode(v);
+        di_t src = pp_literal(v);
         ps(src);
     } else if (di_equal(op, s("var"))) {
         di_t name = di_dict_get(p, s("name"));
@@ -69,7 +171,7 @@ static void expr(di_t pp, di_t e, int indent) {
     di_t op = di_dict_get(e, s("expr"));
     if (di_equal(op, s("lit"))) {
         di_t value = di_dict_get(e, s("value"));
-        di_t src = json_encode(value);
+        di_t src = pp_literal(value);
         ps(src);
     } else if (di_equal(op, s("var"))) {
         di_t name = di_dict_get(e, s("name"));

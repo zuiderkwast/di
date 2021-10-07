@@ -4,12 +4,7 @@
 #include "di_parser.h"
 #include "di_prettyprint.h"
 #include "di_io.h"
-#include "json.h"
 #include "di_debug.h"
-
-/*
- * gcc -Wall -I/opt/local/include dlc.c di.c di_lexer.c di_io.c json.c -L/opt/local/lib -lpcre -lyajl -o dlc
- */
 
 /*
 
@@ -22,22 +17,7 @@ Lexer -> Layout processor -> Parser -> Type and variable access annotator -> Com
  * Like any di function, frees the token if its refc == 0.
  */
 static inline void debug_dump(const char *label, di_t token) {
-	/*
-	// json encode
-	if (!di_is_pointer(token))
-		printf("Debug_dump of non-pointer\n");
-	//printf("Debug dump -- length %d\n", di_(token));
-	assert(di_is_dict(token));
-	di_t json = json_encode(token);
-	if (di_is_undefined(json)) {
-		printf("Failed to convert data to JSON\n");
-		exit(2);
-	}
-	printf("%s%.*s\n", label,
-	       di_string_length(json), di_string_chars(json));
-	di_cleanup(json);
-	*/
-	printf("%s full dump:\n", label);
+	printf("%s", label);
 	di_dump(token, 0);
 	printf("\n");
 }
@@ -45,7 +25,7 @@ static inline void debug_dump(const char *label, di_t token) {
 int main(int argc, char **argv) {
 	if (argc < 2) {
 		fprintf(stderr, "Usage: %s [COMMAND] FILENAME\n", argv[0]);
-		fprintf(stderr, "Commands: source, lex, parse\n");
+		fprintf(stderr, "Commands: source, lex, parse, pp\n");
 		exit(1);
 	}
 	char *cmd, *fn;

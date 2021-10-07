@@ -33,6 +33,28 @@ static char * string_test(void) {
 	return NULL;
 }
 
+static char * string_from_cstring_test(void) {
+    char buf[100];
+    char c = 'a';
+    int l = 0;
+    while (l < 100) {
+        buf[l] = '\0';
+        di_t s = di_string_from_cstring(buf);
+        mu_assert("string lengths match",
+                  di_string_length(s) == l);
+        mu_assert("string contents match",
+                  strncmp(di_string_chars(s), buf, l) == 0);
+        di_cleanup(s);
+        // append a char to buf "abcd..."
+        buf[l++] = c++;
+        if (c > 'z') c = 'a';
+    }
+    return NULL;
+}
+
+//static char * string_append_test(void) {
+    //di_t s = di_string_from_cstring(
+
 static char * array_set_test(void) {
 	di_t a = di_array_empty();
 	di_t b;
@@ -73,6 +95,7 @@ static char * array_push_clone_test(void) {
 
 testfun tests[] = {
 	string_test,
+        string_from_cstring_test,
 	array_set_test,
 	array_push_inplace_test,
 	array_push_clone_test

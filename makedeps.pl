@@ -63,7 +63,7 @@ foreach my $program (@programs) {
 	}
 	$link_deps_str = join(" ", @link_deps);
 	print "$program: $link_deps_str\n";
-	print "\t\$(CC) \$(LDFLAGS) -o $program \$^\n\n";
+	print "\t\$(CC) -o $program \$^ \$(LDFLAGS)\n\n";
 }
 
 # Compile deps.
