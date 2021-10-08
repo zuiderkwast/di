@@ -274,7 +274,10 @@ static inline uint64_t lousy_hash(di_t v) {
 #define OAHT_KEY_EQUALS(a, b) di_equal(a, b)
 #define OAHT_VALUE_T di_t
 #define OAHT_SIZE_T di_size_t
+#define OAHT_MIN_CAPACITY 4
+#define OAHT_NO_STORE_HASH 1
 #define OAHT_EMPTY_KEY di_empty()
+#define OAHT_EMPTY_KEY_BYTE NANBOX_EMPTY_BYTE
 #define OAHT_IS_EMPTY_KEY(key) di_is_empty(key)
 #define OAHT_DELETED_KEY di_deleted()
 #define OAHT_IS_DELETED_KEY(key) di_is_deleted(key)
