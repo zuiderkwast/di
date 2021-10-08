@@ -174,24 +174,24 @@ static pcre *mk_re(const char *regex) {
     return re;
 }
 
-
+#define str(arg) di_string_from_cstring(arg)
 
 static void prepare_patterns(void) {
     if (word_re)
         return; /* already done */
     /* compile patterns */
-    word_re       = mk_re("[[:alpha:]$][\\w$]*"); // Conservative: "[a-z]+"
-    operator_re   = mk_re("->|<=|>=|≤|≥|==|!=|≠|[<>,:;=+*~@\\-{}\\[\\]()]");
-    div_re        = mk_re("/");                  // Conflicts with regex_re
+    word_re       = mk_re("[[:alpha:]$][\\w$]*");  // Conservative: "[a-z]+"
+    operator_re   = mk_re("->|<=|>=|≤|≥|==|!=|≠|[<>,:;=+*~@\\-{}\\[\\]()\\\\]");
+    div_re        = mk_re("/");                    // Conflicts with regex_re
     regex_re      = mk_re("/(?:\\\\/|[^/\\n])*/"); // Conflicts with div_re
     string_re     = mk_re("\"(?:\\\\\"|[^\"\\n])*\"");
     num_re        = mk_re("-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][-+]?[0-9]+)?");
-    nl_re         = mk_re("\\R");               // Any unicode newline sequence
-    spaces_re     = mk_re("\\h+");              // Any horizontal space
+    nl_re         = mk_re("(?:\\#.*?)?\\R");       // Any unicode newline sequence
+    spaces_re     = mk_re("\\h+");                 // Any horizontal space
     keyword_dict = di_dict_empty();
     /* create dict of keywords */
     const char *keywords[] = {
-        "case", "of", "fun", "do",
+        "case", "of", "let", "in", "do", "end",
         "if", "then", "else",
         "and", "or", "not", "mod"
     };
@@ -199,74 +199,93 @@ static void prepare_patterns(void) {
     int n = sizeof(keywords) / sizeof(char *);
     keyword_dict = di_dict_empty();
     for (i = 0; i < n; i++) {
-        keyword_dict = di_dict_set(
-                                   keyword_dict,
-                                   di_string_from_cstring(keywords[i]),
-                                   di_true()
-                                   );
+        keyword_dict = di_dict_set(keyword_dict, str(keywords[i]), di_true());
     }
-    assert(di_dict_contains(keyword_dict, di_string_from_cstring("case")));
+    assert(di_dict_contains(keyword_dict, str("case")));
 }
 
 di_t di_lexer_create(di_t source) {
     check_pcre_compile_flags();
     prepare_patterns();
     di_t lexer = di_dict_empty();
-    lexer = di_dict_set(lexer, di_string_from_cstring("source"), source);
-    lexer = di_dict_set(lexer, di_string_from_cstring("offset"), di_from_int(0));
-    lexer = di_dict_set(lexer, di_string_from_cstring("line"), di_from_int(1));
-    lexer = di_dict_set(lexer, di_string_from_cstring("column"), di_from_int(1));
+    lexer = di_dict_set(lexer, str("source"), source);
+    lexer = di_dict_set(lexer, str("offset"), di_from_int(0));
+    lexer = di_dict_set(lexer, str("line"), di_from_int(1));
+    lexer = di_dict_set(lexer, str("column"), di_from_int(1));
+    lexer = di_dict_set(lexer, str("layout"), di_array_empty());
     return lexer;
 }
 
-#define die_on_prce_error(rc) do{                                       \
-        if ((rc) < PCRE_ERROR_NOMATCH) {                                \
-            fprintf(stderr, "PCRE error %d on line %d.\n", rc, __LINE__); \
-            exit(rc);                                                   \
-        }                                                               \
-    }while(0)
+/* Utility pcre_exec wrapper. Om match, returns true and sets *match_start and
+ * *match_end, if provided. */
+static bool re_match(pcre *re, const char *subject, int len, int start,
+                     int *match_start, int *match_end) {
+    int ovector[3];
+    int rc = pcre_exec(re, NULL, subject, len, start, 0, ovector, 3);
+    if (rc > 0) {
+        if (match_start != NULL) *match_start = ovector[0];
+        if (match_end   != NULL) *match_end   = ovector[1];
+        return true;
+    } else if (rc >= PCRE_ERROR_NOMATCH) {
+        return false;
+    } else {
+        fprintf(stderr, "PCRE error: %d\n", rc);
+        exit(rc);
+    }
+}
 
-/* find a token in the normal state */
+/* Sets the fields in the provided token and returns the new one */
+static di_t set_token_fields(di_t token, di_t op, di_t data,
+                             int line, int column) {
+    if (!di_is_dict(token)) {
+        di_cleanup(token);
+        token = di_dict_empty();
+    }
+    token = di_dict_set(token, str("op"), op);
+    token = (di_is_null(data) ?
+             di_dict_delete(token, str("data")) :
+             di_dict_set(token, str("data"), data));
+    token = di_dict_set(token, str("line"), di_from_int(line));
+    token = di_dict_set(token, str("column"), di_from_int(column));
+    return token;
+}
+
+di_t update_lexer_offsets(di_t lexer, int offset, int line, int column) {
+    lexer = di_dict_set(lexer, str("offset"), di_from_int(offset));
+    lexer = di_dict_set(lexer, str("line"), di_from_int(line));
+    lexer = di_dict_set(lexer, str("column"), di_from_int(column));
+    return lexer;
+}
+
+/* find a token */
 di_t di_lex(di_t * lexer_ptr, di_t old_token, bool accept_regex) {
     di_t lexer = *lexer_ptr;
-    di_t source_lit = di_string_from_cstring("source");
-    di_t offset_lit = di_string_from_cstring("offset");
-    di_t line_lit   = di_string_from_cstring("line");
-    di_t column_lit = di_string_from_cstring("column");
-    di_t op_lit     = di_string_from_cstring("op");
-    di_t data_lit   = di_string_from_cstring("data");
-    di_t source = di_dict_get(lexer, source_lit);
-    di_t offset = di_dict_get(lexer, offset_lit);
-    int line   = di_to_int(di_dict_get(lexer, line_lit));
-    int column = di_to_int(di_dict_get(lexer, column_lit));
+    di_t source = di_dict_get(lexer, str("source"));
+    di_t offset = di_dict_get(lexer, str("offset"));
+    di_t layout = di_dict_get(lexer, str("layout"));
+    int line   = di_to_int(di_dict_get(lexer, str("line")));
+    int column = di_to_int(di_dict_get(lexer, str("column")));
     di_size_t len = di_string_length(source);
-
     char * subject = di_string_chars(source);
     int start = di_to_int(offset);
-    int rc;
-    int ovector[3];
+    int match_start, match_end;
     di_t op;
     di_t data;
-    di_t token;
+    di_t token = di_null();
 
-    // Consume leading whitespace
+    // Consume leading whitespace and update start, line and column.
     while (true) {
         // Consume newline
-        rc = pcre_exec(nl_re, NULL, subject, len, start, 0, ovector, 3);
-        die_on_prce_error(rc);
-        if (rc > 0) {
-            start = ovector[1];
+        if (re_match(nl_re, subject, len, start, NULL, &start)) {
             line++;
             column = 1;
             continue;
         }
         // Consume horizontal whitespace
-        rc = pcre_exec(spaces_re, NULL, subject, len, start, 0, ovector, 3);
-        die_on_prce_error(rc);
-        if (rc > 0) {
-            start = ovector[1];
+        if (re_match(spaces_re, subject, len, start, &match_start, &match_end)) {
+            start = match_end;
             int i;
-            for (i = ovector[0]; i < ovector[1]; i++) {
+            for (i = match_start; i < match_end; i++) {
                 if (subject[i] == '\t') {
                     // Round up column to 8n + 1.
                     column += 8 - (column - 1) % 8;
@@ -282,95 +301,102 @@ di_t di_lex(di_t * lexer_ptr, di_t old_token, bool accept_regex) {
         break;
     }
 
+    // check layout stack to see if we need to insert 'end' or ';'
+    di_size_t layout_depth = di_array_length(layout);
+    if (di_is_dict(old_token) && layout_depth > 0) {
+        di_t layoutframe = di_array_get(layout, layout_depth - 1);
+        di_t layoutcol   = di_dict_get(layoutframe, str("column"));
+        assert(di_is_int(layoutcol));
+        if (column < di_to_int(layoutcol)) {
+            // Insert 'end' (or 'in' after 'let') and pop layout stack
+            di_t layoutop = di_dict_get(layoutframe, str("op"));
+            const char *endop = di_equal(str("let"), layoutop) ? "in" : "end";
+            token = set_token_fields(old_token, str(endop), di_null(),
+                                     line, column);
+            // pop the frame from the stack
+            lexer = di_dict_set(lexer, str("layout"), layout);
+        } else if (column == di_to_int(layoutcol)) {
+            // insert ';' unless we inserted one just before (check oldtoken?)
+            di_t old_op = di_dict_get(old_token, str("op"));
+            if (!di_equal(old_op, str(";"))) {
+                token = set_token_fields(old_token, str(";"), di_null(),
+                                         line, column);
+            }
+        }
+        // If we have set token above, update lexer state and return the token.
+        if (!di_is_null(token)) {
+            lexer = update_lexer_offsets(lexer, start, line, column);
+            *lexer_ptr = lexer;
+            return token;
+        }
+    }
     // Check for end of string
 
     // Match tokens
-    rc = pcre_exec(operator_re, NULL, subject, len, start, 0, ovector, 3);
-    die_on_prce_error(rc);
-    if (rc > 0) {
-        op = di_string_from_chars(subject + start,
-                                  ovector[1] - ovector[0]);
-        data = di_undefined();
+    if (re_match(operator_re, subject, len, start, &match_start, &match_end)) {
+        op = di_string_from_chars(subject + start, match_end - match_start);
+        data = di_null();
         goto found;
     }
 
-    rc = pcre_exec(num_re, NULL, subject, len, start, 0, ovector, 3);
-    die_on_prce_error(rc);
-    if (rc > 0) {
-        op = di_string_from_cstring("lit");
-        data = parse_number(subject + start,
-                            ovector[1] - ovector[0]);
+    if (re_match(num_re, subject, len, start, &match_start, &match_end)) {
+        op = str("lit");
+        data = parse_number(subject + start, match_end - match_start);
         goto found;
     }
 
-    rc = pcre_exec(string_re, NULL, subject, len, start, 0, ovector, 3);
-    die_on_prce_error(rc);
-    if (rc > 0) {
-        op = di_string_from_cstring("lit");
-        data = parse_string(subject + start,
-                            ovector[1] - ovector[0]);
+    if (re_match(string_re, subject, len, start, &match_start, &match_end)) {
+        op = str("lit");
+        data = parse_string(subject + start, match_end - match_start);
         goto found;
     }
 
     if (accept_regex) {
-        rc = pcre_exec(regex_re, NULL, subject, len, start, 0, ovector, 3);
-        die_on_prce_error(rc);
-        if (rc > 0) {
-            op = di_string_from_cstring("regex");
+        if (re_match(regex_re, subject, len, start, &match_start, &match_end)) {
+            op = str("regex");
             data = di_string_from_chars(subject + start + 1,
-                                        ovector[1] - ovector[0] - 2);
+                                        match_end - match_start - 2);
             goto found;
         }
     }
     else {
         // Regex not allowed here => division is allowed.
-        rc = pcre_exec(div_re, NULL, subject, len, start, 0, ovector, 3);
-        die_on_prce_error(rc);
-        if (rc > 0) {
-            op = di_string_from_cstring("/");
-            data = di_undefined();
+        if (re_match(div_re, subject, len, start, &match_start, &match_end)) {
+            op = str("/");
+            data = di_null();
             goto found;
         }
     }
 
     // TODO: more token types
 
-    rc = pcre_exec(word_re, NULL, subject, len, start, 0, ovector, 3);
-    die_on_prce_error(rc);
-    if (rc > 0) {
-        data = di_string_from_chars(subject + start,
-                                    ovector[1] - ovector[0]);
+    if (re_match(word_re, subject, len, start, &match_start, &match_end)) {
+        data = di_string_from_chars(subject + start, match_end - match_start);
         if (di_dict_contains(keyword_dict, data)) {
-            // it's a keyword
             op = data;
-            data = di_undefined();
+            data = di_null();
         }
-        else if (di_equal(data, di_string_from_cstring("false"))) {
-            // literal
-            op = di_string_from_cstring("lit");
+        else if (di_equal(data, str("false"))) {
+            op = str("lit");
             data = di_false();
         }
-        else if (di_equal(data, di_string_from_cstring("true"))) {
-            // literal
-            op = di_string_from_cstring("lit");
+        else if (di_equal(data, str("true"))) {
+            op = str("lit");
             data = di_true();
         }
-        else if (di_equal(data, di_string_from_cstring("null"))) {
-            // literal
-            op = di_string_from_cstring("lit");
+        else if (di_equal(data, str("null"))) {
+            op = str("lit");
             data = di_null();
         }
         else {
-            // it's an identifier
-            op = di_string_from_cstring("ident");
+            op = str("ident");
         }
         goto found;
     }
 
     if (start >= len) {
-        // eof
-        op = di_string_from_cstring("eof");
-        data = di_undefined();
+        op = str("eof");
+        data = di_null();
         goto found;
     }
 
@@ -381,30 +407,31 @@ di_t di_lex(di_t * lexer_ptr, di_t old_token, bool accept_regex) {
     exit(-1);
 
  found:
-    // Create token dict
+    // If old_token is do/of/let/where, add the current column to the layout stack.
     if (di_is_dict(old_token)) {
-        token = old_token;
-    } else {
-        di_cleanup(old_token);
-        token = di_dict_empty();
+        di_t old_op = di_dict_get(old_token, str("op"));
+        if (di_equal(old_op, str("do")) || di_equal(old_op, str("of"))
+            || di_equal(old_op, str("let")) || di_equal(old_op, str("where"))) {
+            di_t frame = di_dict_empty();
+            frame = di_dict_set(frame, str("op"), old_op);
+            frame = di_dict_set(frame, str("column"), di_from_int(column));
+            di_array_push(&layout, frame);
+            lexer = di_dict_set(lexer, str("layout"), layout);
+        }
     }
-    token = di_dict_set(token, op_lit, op);
-    token = di_is_undefined(data) ? di_dict_delete(token, data_lit)
-        : di_dict_set(token, data_lit, data);
-    token = di_dict_set(token, line_lit, di_from_int(line));
-    token = di_dict_set(token, column_lit, di_from_int(column));
+
+    // Create token dict
+    token = set_token_fields(old_token, op, data, line, column);
 
     // Update lexer offsets
-    start = ovector[1];
-    column += ovector[1] - ovector[0];
-    lexer = di_dict_set(lexer, offset_lit, di_from_int(start));
-    lexer = di_dict_set(lexer, line_lit, di_from_int(line));
-    lexer = di_dict_set(lexer, column_lit, di_from_int(column));
+    start = match_end;
+    column += match_end - match_start;
+    lexer = update_lexer_offsets(lexer, start, line, column);
+    lexer = di_dict_set(lexer, str("offset"), di_from_int(start));
+    lexer = di_dict_set(lexer, str("line"), di_from_int(line));
+    lexer = di_dict_set(lexer, str("column"), di_from_int(column));
 
     // Return lexer (by pointer) and token (normal return)
     *lexer_ptr = lexer;
     return token;
 }
-
-/* token, when the parser expects a pattern */
-di_t di_lex_pattern(di_t lexer);

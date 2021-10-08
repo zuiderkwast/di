@@ -116,11 +116,16 @@ static di_t get_token_data(di_t *p) {
 
 // Sets line and col - the position of the current token.
 static void copy_token_pos(di_t *p, int *line, int *col) {
+    if (!line && !col) return;
     di_t token = di_dict_get(*p, di_string_from_cstring("token"));
-    di_t l = di_dict_get(token, di_string_from_cstring("line"));
-    di_t c = di_dict_get(token, di_string_from_cstring("column"));
-    *line = di_to_int(l);
-    *col  = di_to_int(c);
+    if (line) {
+        di_t l = di_dict_get(token, di_string_from_cstring("line"));
+        *line = di_to_int(l);
+    }
+    if (col) {
+        di_t c = di_dict_get(token, di_string_from_cstring("column"));
+        *col  = di_to_int(c);
+    }
 }
 
 // if token matches, sets line and col, discards the token and returns true.
@@ -211,7 +216,6 @@ static di_t mkpat(const char *op, int line, int col, ...) {
 static di_t case_alts(di_t *p) {
     int l, c;
     di_t alts = di_array_empty();
-    eat(p, "{");
     do {
         di_t pat = pattern(p);
         eat(p, "->");
@@ -224,20 +228,19 @@ static di_t case_alts(di_t *p) {
         */
         di_array_push(&alts, alt);
     } while (try_token(p, &l, &c, ";"));
-    eat(p, "}");
+    eat(p, "end");
     return alts;
 }
 
-// Body of a do {expr, ...} construct.
+// Body of a `do expr ; ... end` construct.
 static di_t expr_seq(di_t *p) {
     int l, c;
     di_t es = di_array_empty();
-    eat(p, "{");
     do {
         di_t e = expr(p);
         di_array_push(&es, e);
     } while (try_token(p, &l, &c, ";"));
-    eat(p, "}");
+    eat(p, "end");
     return es;
 }
 
@@ -276,6 +279,7 @@ static di_t leftassoc_expr(di_t *p, di_t (*nextexpr)(di_t *p), ...) {
 static di_t expr1(di_t *p);
 static di_t expr2(di_t *p);
 static di_t expr3(di_t *p);
+static di_t expr_apply(di_t *p);
 static di_t expr4(di_t *p);
 
 static di_t expr(di_t *p) {
@@ -291,17 +295,29 @@ static di_t expr2(di_t *p) {
 }
 
 static di_t expr3(di_t *p) {
-    return leftassoc_expr(p, expr4, "*", "/", "mod", NULL);
+    return leftassoc_expr(p, expr_apply, "*", "/", "mod", NULL);
 }
 
 // function application
 // expr -> expr '(' args ')'
+// TODO: expr -> expr '[' index ']' (array access) is similar
+// TODO: expr -> expr '{' dict key '}' (dict access) is similar
 static di_t expr_apply(di_t *p) {
     di_t e = expr4(p);
     int l, c;
     while (try_token(p, &l, &c, "(")) {
-        // TODO: args.........
-        eat(p, ")");
+        di_t es = di_array_empty(); // args
+        if (try_token(p, NULL, NULL, ")")) {
+            // empty arg list
+        } else {
+            do {
+                di_t e = expr(p);
+                di_array_push(&es, e);
+            } while (try_token(p, NULL, NULL, ","));
+            eat(p, ")");
+        }
+        // TODO: Use location of the function name instead of "("?
+        e = mkexpr("apply", l, c, "func", e, "args", es, NULL);
     }
     return e;
 }
