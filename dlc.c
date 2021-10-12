@@ -45,9 +45,8 @@ int main(int argc, char **argv) {
 		debug_dump("Lexer: ", lexer);
 		di_t token = di_null();
 		di_t op;
-		bool accept_regex = true;
 		do {
-			token = di_lex(&lexer, token, accept_regex);
+			token = di_lex(&lexer, token);
 			op = di_dict_get(token, di_string_from_cstring("op"));
 			debug_dump("Token: ", token);
 		} while (!di_equal(op, di_string_from_cstring("eof")));

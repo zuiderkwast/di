@@ -36,11 +36,7 @@ di_t di_parse(di_t source) {
  * Helpers for setting parser flags, raising errors, fetching tokens, etc.
  *----------------------------------------------------------------------------*/
 
-static void set_re_ok(di_t *p, bool re_ok) {
-    *p = di_dict_set(*p, di_string_from_cstring("re_ok"),
-                     di_from_boolean(re_ok));
-}
-
+/* Set to true when expecting a pattern and false when expecting expr. */
 static inline void error(di_t message, int line, int col) {
     fprintf(stderr, "Parse error on line %d, column %d: %.*s\n",
             line,
@@ -54,11 +50,9 @@ static inline void error(di_t message, int line, int col) {
 static void fetch_next_token(di_t *p) {
     di_t token_str = di_string_from_cstring("token");
     di_t old_token = di_dict_get(*p, token_str);
-    di_t re_ok = di_dict_get(*p, di_string_from_cstring("re_ok"));
-    bool accept_pattern = di_equal(di_true(), re_ok);
     di_t lexer_str = di_string_from_cstring("lexer");
     di_t lexer = di_dict_get(*p, lexer_str);
-    di_t token = di_lex(&lexer, old_token, accept_pattern);
+    di_t token = di_lex(&lexer, old_token);
     *p = di_dict_set(*p, lexer_str, lexer);
     *p = di_dict_set(*p, token_str, token);
 }
@@ -68,9 +62,7 @@ static di_t create_parser(di_t source) {
     //return lexer;
     di_t p = di_dict_empty();
     p = di_dict_set(p, di_string_from_cstring("lexer"), lexer);
-    p = di_dict_set(p, di_string_from_cstring("re_ok"), di_true());
     p = di_dict_set(p, di_string_from_cstring("token"), di_null());
-    //p = di_dict_set(p, di_string_from_cstring("tokens"), di_array_empty());
     fetch_next_token(&p);
     return p;
 }
@@ -279,8 +271,12 @@ static di_t leftassoc_expr(di_t *p, di_t (*nextexpr)(di_t *p), ...) {
 static di_t expr1(di_t *p);
 static di_t expr2(di_t *p);
 static di_t expr3(di_t *p);
-static di_t expr_apply(di_t *p);
 static di_t expr4(di_t *p);
+static di_t expr5(di_t *p);
+
+/* static di_t expr(di_t *p) { */
+/*     return leftassoc_expr(p, expr0, "=", NULL); */
+/* } */
 
 static di_t expr(di_t *p) {
     return leftassoc_expr(p, expr1, "and", "or", NULL);
@@ -295,77 +291,91 @@ static di_t expr2(di_t *p) {
 }
 
 static di_t expr3(di_t *p) {
-    return leftassoc_expr(p, expr_apply, "*", "/", "mod", NULL);
+    return leftassoc_expr(p, expr4, "*", "/", "mod", NULL);
 }
 
-// function application
-// expr -> expr '(' args ')'
-// TODO: expr -> expr '[' index ']' (array access) is similar
-// TODO: expr -> expr '{' dict key '}' (dict access) is similar
-static di_t expr_apply(di_t *p) {
-    di_t e = expr4(p);
+// expr -> expr '(' arg, arg, ... ')' (function application)
+// expr -> expr '{' key: val, ... '}' (dict update)
+static di_t expr4(di_t *p) {
+    di_t e = expr5(p);
     int l, c;
-    while (try_token(p, &l, &c, "(")) {
-        di_t es = di_array_empty(); // args
-        if (try_token(p, NULL, NULL, ")")) {
-            // empty arg list
+    while (1) {
+        if (try_token(p, &l, &c, "(")) {
+            // function application f(x,y)
+            di_t es = di_array_empty(); // args
+            if (try_token(p, NULL, NULL, ")")) {
+                // empty arg list
+            } else {
+                do {
+                    di_t e = expr(p);
+                    di_array_push(&es, e);
+                } while (try_token(p, NULL, NULL, ","));
+                eat(p, ")");
+            }
+            e = mkexpr("apply", l, c, "func", e, "args", es, NULL);
+        } else if (try_token(p, &l, &c, "{")) {
+            // dict update d{k: v}
+            di_t pairs = di_array_empty();
+            if (try_token(p, NULL, NULL, "}")) {
+                // empty key-value list
+            } else {
+                do {
+                    di_t k = expr(p);
+                    eat(p, ":");
+                    di_t v = expr(p);
+                    di_t pair = mkdict("key", k, "value", v, NULL);
+                    di_array_push(&pairs, pair);
+                } while (try_token(p, NULL, NULL, ","));
+                eat(p, "}");
+            }
+            e = mkexpr("dictup", l, c, "subj", e, "pairs", pairs, NULL);
         } else {
-            do {
-                di_t e = expr(p);
-                di_array_push(&es, e);
-            } while (try_token(p, NULL, NULL, ","));
-            eat(p, ")");
+            break;
         }
-        // TODO: Use location of the function name instead of "("?
-        e = mkexpr("apply", l, c, "func", e, "args", es, NULL);
     }
     return e;
 }
 
-static di_t expr4(di_t *p) {
+static di_t expr5(di_t *p) {
     int l, c; // line and col
     if (try_token(p, &l, &c, "case")) {
-        // case Expr of CaseSeq
         di_t subj = expr(p);
         eat(p, "of");
         di_t alts = case_alts(p);
         return mkexpr("case", l, c, "subj", subj, "alts", alts, NULL);
-    }
-    if (try_token(p, &l, &c, "do")) {
+    } else if (try_token(p, &l, &c, "do")) {
         di_t seq = expr_seq(p);
         return mkexpr("do", l, c, "seq", seq, NULL);
-    }
-    if (try_token(p, &l, &c, "if")) {
+    } else if (try_token(p, &l, &c, "if")) {
         di_t cond = expr(p);
         eat(p, "then");
         di_t if_then = expr(p);
+        try_token(p, NULL, NULL, ";"); // Optional ";"
         eat(p, "else");
         di_t if_else = expr(p);
         return mkexpr("if", l, c, "cond", cond, "then", if_then, "else",
                       if_else, NULL);
-    }
-    // TODO: "fun", "lambda", etc.
-    if (try_token(p, &l, &c, "[")) {
+    } else if (0) {
+        // TODO: "let-in", "where"
+        // TODO: "fun", "lambda", etc.
+    } else if (try_token(p, &l, &c, "[")) {
         di_t elems = di_array_empty();
-        if (try_token(p, &l, &c, "]")) {
+        if (try_token(p, NULL, NULL, "]")) {
             // empty array
-            fetch_next_token(p);
         } else {
-            int l, c; // local l and c shadowing the outer ones
             do {
 
                 di_t elem = expr(p);
                 di_array_push(&elems, elem);
-            } while (try_token(p, &l, &c, ","));
+            } while (try_token(p, NULL, NULL, ","));
             eat(p, "]");
         }
         return mkexpr("array", l, c, "elems", elems, NULL);
-    }
-    if (try_token(p, &l, &c, "{")) {
+    } else if (try_token(p, &l, &c, "{")) {
         // Dictionary constructor
         di_t pairs = di_array_empty();
-        if (try_token(p, &l, &c, "}")) {
-            fetch_next_token(p);
+        if (try_token(p, NULL, NULL, "}")) {
+            // empty dict
         } else {
             do {
                 di_t k = expr(p);
@@ -373,37 +383,56 @@ static di_t expr4(di_t *p) {
                 di_t v = expr(p);
                 di_t pair = mkdict("key", k, "value", v, NULL);
                 di_array_push(&pairs, pair);
-            } while (try_token(p, &l, &c, ","));
+            } while (try_token(p, NULL, NULL, ","));
             eat(p, "}");
         }
         return mkexpr("dict", l, c, "pairs", pairs, NULL);
-    }
-    if (is_token(p, "ident")) {
+    } else if (is_token(p, "ident")) {
         // variable
         di_t name = get_token_data(p);
         copy_token_pos(p, &l, &c);
         fetch_next_token(p);
         return mkexpr("var", l, c, "name", name, NULL);
-    }
-    if (is_token(p, "lit")) {
+    } else if (is_token(p, "lit")) {
         // Literal
         di_t value = get_token_data(p);
         copy_token_pos(p, &l, &c);
         fetch_next_token(p);
         return mkexpr("lit", l, c, "value", value, NULL);
-    }
-    if (try_token(p, &l, &c, "(")) {
+    } else if (try_token(p, NULL, NULL, "(")) {
         di_t e = expr(p);
         eat(p, ")");
         return e;
+    } else {
+        // Fail.
+        error_unexpected_token(p, "expr");
     }
-    // Fail.
-    error_unexpected_token(p, "expr");
     // never reached
     return di_null();
 }
 
+// --- patterns ---
+
+static di_t pattern1(di_t *p);
+
 di_t pattern(di_t *p) {
+    di_t p1 = pattern1(p);
+    int l, c;
+    // Patterns with a binary operator
+    const char *ops[] = {"~", "@"};
+    for (int i = 0; i < 2; i++) {
+        if (try_token(p, &l, &c, ops[i])) {
+            di_t p2 = pattern1(p);
+            //di_t op = di_string_from_cstring(ops[i]);
+            p1 = mkpat(ops[i], l, c, "left", p1, "right", p2, NULL);
+            break;
+        }
+    }
+    return p1;
+}
+
+/* All other patterns */
+di_t pattern1(di_t *p) {
     int l, c; // line and col
     di_t pat;
     if (is_token(p, "ident")) {
@@ -411,18 +440,47 @@ di_t pattern(di_t *p) {
         di_t name = get_token_data(p);
         copy_token_pos(p, &l, &c);
         pat = mkpat("var", l, c, "name", name, NULL);
-        //fetch_next_token(p);
     } else if (is_token(p, "lit")) {
         di_t value = get_token_data(p);
         copy_token_pos(p, &l, &c);
-        //fetch_next_token(p);
         pat = mkpat("lit", l, c, "value", value, NULL);
-        //return pat;
     } else if (is_token(p, "regex")) {
         di_t re = get_token_data(p);
         copy_token_pos(p, &l, &c);
-        //fetch_next_token(p);
         pat = mkpat("regex", l, c, "regex", re, NULL);
+    } else if (try_token(p, &l, &c, "[")) {
+        di_t elems = di_array_empty();
+        if (try_token(p, NULL, NULL, "]")) {
+            // empty array
+            fetch_next_token(p);
+        } else {
+            do {
+                di_t elem = pattern(p);
+                di_array_push(&elems, elem);
+            } while (try_token(p, NULL, NULL, ","));
+            eat(p, "]");
+        }
+        return mkpat("array", l, c, "elems", elems, NULL);
+    } else if (try_token(p, &l, &c, "{")) {
+        // Dict
+        di_t pairs = di_array_empty();
+        if (try_token(p, NULL, NULL, "}")) {
+            // empty dict
+        } else {
+            do {
+                di_t k = pattern(p);
+                eat(p, ":");
+                di_t v = pattern(p);
+                di_t pair = mkdict("key", k, "value", v, NULL);
+                di_array_push(&pairs, pair);
+            } while (try_token(p, NULL, NULL, ","));
+            eat(p, "}");
+        }
+        return mkpat("dict", l, c, "pairs", pairs, NULL);
+    } else if (try_token(p, NULL, NULL, "(")) {
+        pat = pattern(p);
+        eat(p, ")");
+        return pat;
     } else {
         error_unexpected_token(p, "pattern");
     }

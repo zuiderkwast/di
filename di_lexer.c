@@ -258,8 +258,17 @@ di_t update_lexer_offsets(di_t lexer, int offset, int line, int column) {
 }
 
 /* find a token */
-di_t di_lex(di_t * lexer_ptr, di_t old_token, bool accept_regex) {
+di_t di_lex(di_t * lexer_ptr, di_t old_token) {
     di_t lexer = *lexer_ptr;
+    bool accept_regex = true;
+    if (di_is_dict(old_token)) {
+        di_t old_op = di_dict_get(old_token, str("op"));
+        if (di_equal(old_op, str("ident")) ||
+            di_equal(old_op, str("lit")) ||
+            di_equal(old_op, str(")")) ||
+            di_equal(old_op, str("]")) ||
+            di_equal(old_op, str("}"))) accept_regex = false; // division
+    }
     di_t source = di_dict_get(lexer, str("source"));
     di_t offset = di_dict_get(lexer, str("offset"));
     di_t layout = di_dict_get(lexer, str("layout"));
@@ -314,6 +323,7 @@ di_t di_lex(di_t * lexer_ptr, di_t old_token, bool accept_regex) {
             token = set_token_fields(old_token, str(endop), di_null(),
                                      line, column);
             // pop the frame from the stack
+            di_array_pop(&layout);
             lexer = di_dict_set(lexer, str("layout"), layout);
         } else if (column == di_to_int(layoutcol)) {
             // insert ';' unless we inserted one just before (check oldtoken?)
