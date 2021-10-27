@@ -11,7 +11,7 @@ static inline void print_indent(int indent) {
 
 void di_dump(di_t v, int indent) {
 	// pointer types
-	if (0&&di_is_pointer(v)) {
+	if (di_is_pointer(v)) {
 		di_tagged_t *d = di_to_pointer(v);
 		di_size_t i;
 		printf("|tag=%#x refc=%d %p| ", d->tag, d->refc, (void*)d);

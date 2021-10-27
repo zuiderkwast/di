@@ -47,6 +47,7 @@ di_t di_string_create_presized(di_size_t length) {
 		return di_shortstring_create_undef(length);
 	dynstr_t * s = dynstr_create(length);
 	s->len = length;
+	s->chars[length] = '\0'; // dynstr are nul terminated
 	di_tagged_t * tagged = (di_tagged_t *)s;
 	di_init_tagged(tagged, DI_STRING);
 	return di_from_pointer(tagged);

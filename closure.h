@@ -42,6 +42,10 @@ static inline void closure_init(struct closure *c, void *fun,
 /*
  * Example of calling a closure. This will typically be done using generated
  * code.
+ *
+ * If we need a library function, maybe we can use extension:
+ * https://gcc.gnu.org/onlinedocs/gcc-4.0.4/gcc/Constructing-Calls.html
+ * or Clang Blocks: https://clang.llvm.org/docs/BlockLanguageSpec.html
  */
 static inline closure_call0(struct closure *c) {
 	return (c->envsize == 0) ?

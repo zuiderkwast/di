@@ -38,10 +38,12 @@ int main(int argc, char **argv) {
 	}
 	di_t filename = di_string_from_cstring(fn);
 	di_t source = di_readfile(filename);
+        di_cleanup(filename);
 	if (!strcmp("source", cmd)) {
 		debug_dump("Source: ", source);
 	} else if (!strcmp("lex", cmd)) {
 		di_t lexer = di_lexer_create(source);
+                //di_cleanup(source); // should be done by di_lexer_create(source);
 		debug_dump("Lexer: ", lexer);
 		di_t token = di_null();
 		di_t op;
@@ -50,13 +52,17 @@ int main(int argc, char **argv) {
 			op = di_dict_get(token, di_string_from_cstring("op"));
 			debug_dump("Token: ", token);
 		} while (!di_equal(op, di_string_from_cstring("eof")));
+                di_cleanup(token);
+                di_cleanup(lexer);
 	} else if (!strcmp("parse", cmd)) {
 		di_t tree = di_parse(source);
 		printf("Parsing done.\n");
 		debug_dump("Parse tree: ", tree);
+                di_cleanup(tree);
 	} else if (!strcmp("pp", cmd)) {
 		di_t tree = di_parse(source);
 		di_prettyprint(tree);
+                di_cleanup(tree);
 	} else {
 		fprintf(stderr, "Bad command: %s\n", cmd);
 		exit(1);

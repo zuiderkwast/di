@@ -148,7 +148,6 @@ static pcre *word_re = NULL, *operator_re, *div_re, *regex_re, *string_re,
     *num_re, *nl_re, *spaces_re;
 static di_t keyword_dict;
 
-
 /* wrapper for pcre_compile */
 static pcre *mk_re(const char *regex) {
     const char *error;
@@ -181,14 +180,14 @@ static void prepare_patterns(void) {
         return; /* already done */
     /* compile patterns */
     word_re       = mk_re("[[:alpha:]$][\\w$]*");  // Conservative: "[a-z]+"
-    operator_re   = mk_re("->|<=|>=|≤|≥|==|!=|≠|[<>,:;=+*~@\\-{}\\[\\]()\\\\]");
+    operator_re   = mk_re("->|<=|=<|>=|≤|≥|==|!=|≠|[<>,:;=+*~@\\-{}\\[\\]()\\\\]");
     div_re        = mk_re("/");                    // Conflicts with regex_re
     regex_re      = mk_re("/(?:\\\\/|[^/\\n])*/"); // Conflicts with div_re
     string_re     = mk_re("\"(?:\\\\\"|[^\"\\n])*\"");
     num_re        = mk_re("-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][-+]?[0-9]+)?");
     nl_re         = mk_re("(?:\\#.*?)?\\R");       // Any unicode newline sequence
     spaces_re     = mk_re("\\h+");                 // Any horizontal space
-    keyword_dict = di_dict_empty();
+
     /* create dict of keywords */
     const char *keywords[] = {
         "case", "of", "let", "in", "do", "end",
@@ -199,20 +198,30 @@ static void prepare_patterns(void) {
     int n = sizeof(keywords) / sizeof(char *);
     keyword_dict = di_dict_empty();
     for (i = 0; i < n; i++) {
-        keyword_dict = di_dict_set(keyword_dict, str(keywords[i]), di_true());
+        keyword_dict = di_dict_set(keyword_dict, str(keywords[i]), di_null());
     }
-    assert(di_dict_contains(keyword_dict, str("case")));
+}
+
+/* Adds a level to the layout stack, for automatic insertion of ";" and "end" */
+void push_layout(di_t *layout_ptr, int column, di_t endop) {
+    di_t frame = di_dict_empty();
+    frame = di_dict_set(frame, str("op"), endop);
+    frame = di_dict_set(frame, str("column"), di_from_int(column));
+    di_array_push(layout_ptr, frame);
 }
 
 di_t di_lexer_create(di_t source) {
     check_pcre_compile_flags();
     prepare_patterns();
     di_t lexer = di_dict_empty();
+    //assert(di_is_array(lexer)); //<-- crash for testing backtraces
     lexer = di_dict_set(lexer, str("source"), source);
     lexer = di_dict_set(lexer, str("offset"), di_from_int(0));
     lexer = di_dict_set(lexer, str("line"), di_from_int(1));
     lexer = di_dict_set(lexer, str("column"), di_from_int(1));
-    lexer = di_dict_set(lexer, str("layout"), di_array_empty());
+    di_t layout = di_array_empty();
+    push_layout(&layout, 1, str("end")); // <- implicit top-level "do"
+    lexer = di_dict_set(lexer, str("layout"), layout);
     return lexer;
 }
 
@@ -283,7 +292,7 @@ di_t di_lex(di_t * lexer_ptr, di_t old_token) {
     di_t token = di_null();
 
     // Consume leading whitespace and update start, line and column.
-    while (true) {
+    while (start < len) {
         // Consume newline
         if (re_match(nl_re, subject, len, start, NULL, &start)) {
             line++;
@@ -316,17 +325,15 @@ di_t di_lex(di_t * lexer_ptr, di_t old_token) {
         di_t layoutframe = di_array_get(layout, layout_depth - 1);
         di_t layoutcol   = di_dict_get(layoutframe, str("column"));
         assert(di_is_int(layoutcol));
-        if (column < di_to_int(layoutcol)) {
+        if (column < di_to_int(layoutcol) || start >= len) {
             // Insert 'end' (or 'in' after 'let') and pop layout stack
-            di_t layoutop = di_dict_get(layoutframe, str("op"));
-            const char *endop = di_equal(str("let"), layoutop) ? "in" : "end";
-            token = set_token_fields(old_token, str(endop), di_null(),
-                                     line, column);
+            di_t endop = di_dict_get(layoutframe, str("op"));
+            token = set_token_fields(old_token, endop, di_null(), line, column);
             // pop the frame from the stack
-            di_array_pop(&layout);
+            di_cleanup(di_array_pop(&layout));
             lexer = di_dict_set(lexer, str("layout"), layout);
         } else if (column == di_to_int(layoutcol)) {
-            // insert ';' unless we inserted one just before (check oldtoken?)
+            // insert ';' except if the previous token was ';'.
             di_t old_op = di_dict_get(old_token, str("op"));
             if (!di_equal(old_op, str(";"))) {
                 token = set_token_fields(old_token, str(";"), di_null(),
@@ -340,11 +347,24 @@ di_t di_lex(di_t * lexer_ptr, di_t old_token) {
             return token;
         }
     }
+
     // Check for end of string
+    if (start >= len) {
+        op = str("eof");
+        data = di_null();
+        goto found;
+    }
 
     // Match tokens
     if (re_match(operator_re, subject, len, start, &match_start, &match_end)) {
         op = di_string_from_chars(subject + start, match_end - match_start);
+        // Normalize operators
+        if (di_equal(op, str("≥")))
+            op = str(">=");
+        else if (di_equal(op, str("≤")) || di_equal(op, str("<=")))
+            op = str("=<");
+        else if (di_equal(op, str("≠")))
+            op = str("!=");
         data = di_null();
         goto found;
     }
@@ -378,8 +398,6 @@ di_t di_lex(di_t * lexer_ptr, di_t old_token) {
         }
     }
 
-    // TODO: more token types
-
     if (re_match(word_re, subject, len, start, &match_start, &match_end)) {
         data = di_string_from_chars(subject + start, match_end - match_start);
         if (di_dict_contains(keyword_dict, data)) {
@@ -404,28 +422,35 @@ di_t di_lex(di_t * lexer_ptr, di_t old_token) {
         goto found;
     }
 
-    if (start >= len) {
-        op = str("eof");
-        data = di_null();
-        goto found;
-    }
-
     // Unmatched token
     fprintf(stderr,
-            "Unmatched token on line %d, column %d\n",
+            "Unmatched character on line %d, column %d\n",
             line, column);
     exit(-1);
 
  found:
-    // If old_token is do/of/let/where, add the current column to the layout stack.
-    if (di_is_dict(old_token)) {
+    // Here op, data, line and column are set for the found token.
+
+    if ((di_equal(op, str("end")) || di_equal(op, str("in")))
+        && di_array_length(layout) > 0) {
+        // If token is "end" or "in", pop the layout stack if it matches, so we
+        // don't insert tokens that are explicitly provided.
+        di_t layoutframe = di_array_get(layout, di_array_length(layout) - 1);
+        di_t endop = di_dict_get(layoutframe, str("op"));
+        if (di_equal(op, endop)) {
+            di_cleanup(di_array_pop(&layout));
+            lexer = di_dict_set(lexer, str("layout"), layout);
+        }
+    } else if (di_is_dict(old_token)) {
+        // If old_token is do/of/let/where, add the current column to the layout
+        // stack.
         di_t old_op = di_dict_get(old_token, str("op"));
         if (di_equal(old_op, str("do")) || di_equal(old_op, str("of"))
-            || di_equal(old_op, str("let")) || di_equal(old_op, str("where"))) {
-            di_t frame = di_dict_empty();
-            frame = di_dict_set(frame, str("op"), old_op);
-            frame = di_dict_set(frame, str("column"), di_from_int(column));
-            di_array_push(&layout, frame);
+            || di_equal(old_op, str("where"))) {
+            push_layout(&layout, column, str("end"));
+            lexer = di_dict_set(lexer, str("layout"), layout);
+        } else if (di_equal(old_op, str("let"))) {
+            push_layout(&layout, column, str("in"));
             lexer = di_dict_set(lexer, str("layout"), layout);
         }
     }

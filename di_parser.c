@@ -1,35 +1,23 @@
-#include <stdio.h>
 #include <stdarg.h>
 #include "di.h"
 #include "di_lexer.h"
-#include "di_io.h"
-#include "json.h"
-//#include "di_debug.h"
-
 #include "di_parser.h"
-
-/*----------------------------------------------------------------------------
- * Inspired by the syntax of other languages.
- *
- * - Haskell: http://www.haskell.org/onlinereport/haskell2010/haskellch10.html
- * - C: http://www.cs.man.ac.uk/~pjj/bnf/c_syntax.bnf
- *----------------------------------------------------------------------------*/
-
 
 /*----------------------------------------------------------------------------
  * Parsers for some of the main levels in the syntax
  *----------------------------------------------------------------------------*/
 
 static di_t create_parser(di_t source);
+static di_t expr_seq(di_t *p);
 static di_t expr(di_t *p);
-static di_t pattern(di_t *p);
 
+/* Parses source code and returns parse tree. The root node is an array of
+ * expressions. */
 di_t di_parse(di_t source) {
     di_t p = create_parser(source);
-    // This accepted non-terminal should be module, etc.
-    di_t tree = expr(&p);
+    di_t exprs = expr_seq(&p);
     di_cleanup(p);
-    return tree;
+    return exprs;
 }
 
 /*----------------------------------------------------------------------------
@@ -59,7 +47,6 @@ static void fetch_next_token(di_t *p) {
 
 static di_t create_parser(di_t source) {
     di_t lexer = di_lexer_create(source);
-    //return lexer;
     di_t p = di_dict_empty();
     p = di_dict_set(p, di_string_from_cstring("lexer"), lexer);
     p = di_dict_set(p, di_string_from_cstring("token"), di_null());
@@ -106,7 +93,7 @@ static di_t get_token_data(di_t *p) {
     return data;
 }
 
-// Sets line and col - the position of the current token.
+// Sets the position of the current token in the parser state.
 static void copy_token_pos(di_t *p, int *line, int *col) {
     if (!line && !col) return;
     di_t token = di_dict_get(*p, di_string_from_cstring("token"));
@@ -196,28 +183,16 @@ static di_t mkexpr(const char *op, int line, int col, ...) {
     return node;
 }
 
-static di_t mkpat(const char *op, int line, int col, ...) {
-    va_list va;
-    va_start(va, col);
-    di_t node = vmknode("pat", op, line, col, va);
-    va_end(va);
-    return node;
-}
-
 // [{"pat": pattern, "expr": expr}, ...]
 static di_t case_alts(di_t *p) {
     int l, c;
     di_t alts = di_array_empty();
     do {
-        di_t pat = pattern(p);
+        di_t pat = expr(p);
         eat(p, "->");
         di_t exp = expr(p);
+        // TODO: validate pat and exp as pattern and expression, resp.
         di_t alt = mkdict("pat", pat, "expr", exp, NULL);
-        /*
-          di_t alt = di_dict_empty();
-          alt = di_dict_set(alt, di_string_from_cstring("pat"), pat);
-          alt = di_dict_set(alt, di_string_from_cstring("expr"), exp);
-        */
         di_array_push(&alts, alt);
     } while (try_token(p, &l, &c, ";"));
     eat(p, "end");
@@ -233,12 +208,15 @@ static di_t expr_seq(di_t *p) {
         di_array_push(&es, e);
     } while (try_token(p, &l, &c, ";"));
     eat(p, "end");
+    // TODO: Combine function definitions with multiple clauses.
     return es;
 }
 
 // Creates a binary expression {"expr": op, "left": left, "right": right}.
-// Copies line and column from the left operand.
-static di_t mkbinopexpr(di_t op, di_t left, di_t right) {
+// Copies line and column from the left operand. Shall we use the op's location
+// instead?
+static di_t mkbinopexpr(const char *op_str, di_t left, di_t right) {
+    di_t op = di_string_from_cstring(op_str);
     di_t line = di_dict_get(left, di_string_from_cstring("line"));
     di_t col  = di_dict_get(left, di_string_from_cstring("column"));
     return mkdict("expr", op, "line", line, "column", col, "left", left,
@@ -258,8 +236,7 @@ static di_t leftassoc_expr(di_t *p, di_t (*nextexpr)(di_t *p), ...) {
         while ((arg = va_arg(va, char const *)) != NULL) {
             if (try_token(p, &l, &c, arg)) {
                 di_t e2 = nextexpr(p);
-                di_t op = di_string_from_cstring(arg);
-                e1 = mkbinopexpr(op, e1, e2);
+                e1 = mkbinopexpr(arg, e1, e2);
                 break;
             }
         }
@@ -268,22 +245,30 @@ static di_t leftassoc_expr(di_t *p, di_t (*nextexpr)(di_t *p), ...) {
     return e1;
 }
 
+static di_t expr0(di_t *p);
 static di_t expr1(di_t *p);
 static di_t expr2(di_t *p);
 static di_t expr3(di_t *p);
 static di_t expr4(di_t *p);
 static di_t expr5(di_t *p);
 
-/* static di_t expr(di_t *p) { */
-/*     return leftassoc_expr(p, expr0, "=", NULL); */
-/* } */
-
 static di_t expr(di_t *p) {
+    // FIXME: "=" is right associative
+    //return leftassoc_expr(p, expr0, "=", NULL);
+    di_t e0 = expr0(p);
+    if (try_token(p, NULL, NULL, "=")) {
+        di_t e = expr(p);
+        return mkbinopexpr("=", e0, e);
+    }
+    return e0;
+}
+
+static di_t expr0(di_t *p) {
     return leftassoc_expr(p, expr1, "and", "or", NULL);
 }
 
 static di_t expr1(di_t *p) {
-    return leftassoc_expr(p, expr2, "<", ">", "≤", "≥", "==", "!=", NULL);
+    return leftassoc_expr(p, expr2, "<", ">", "=<", ">=", "==", "!=", NULL);
 }
 
 static di_t expr2(di_t *p) {
@@ -364,7 +349,6 @@ static di_t expr5(di_t *p) {
             // empty array
         } else {
             do {
-
                 di_t elem = expr(p);
                 di_array_push(&elems, elem);
             } while (try_token(p, NULL, NULL, ","));
@@ -391,14 +375,28 @@ static di_t expr5(di_t *p) {
         // variable
         di_t name = get_token_data(p);
         copy_token_pos(p, &l, &c);
+        di_t e = mkexpr("var", l, c, "name", name, NULL);
         fetch_next_token(p);
-        return mkexpr("var", l, c, "name", name, NULL);
+        return e;
     } else if (is_token(p, "lit")) {
         // Literal
         di_t value = get_token_data(p);
         copy_token_pos(p, &l, &c);
+        di_t e = mkexpr("lit", l, c, "value", value, NULL);
         fetch_next_token(p);
-        return mkexpr("lit", l, c, "value", value, NULL);
+        return e;
+    } else if (is_token(p, "regex")) {
+        di_t re = get_token_data(p);
+        copy_token_pos(p, &l, &c);
+        di_t e = mkexpr("regex", l, c, "regex", re, NULL);
+        fetch_next_token(p);
+        return e;
+    } else if (try_token(p, &l, &c, "-")) {
+        di_t e = expr(p);
+        return mkexpr("-", l, c, "right", e, NULL);
+    } else if (try_token(p, &l, &c, "not")) {
+        di_t e = expr(p);
+        return mkexpr("not", l, c, "right", e, NULL);
     } else if (try_token(p, NULL, NULL, "(")) {
         di_t e = expr(p);
         eat(p, ")");
@@ -409,81 +407,4 @@ static di_t expr5(di_t *p) {
     }
     // never reached
     return di_null();
-}
-
-// --- patterns ---
-
-static di_t pattern1(di_t *p);
-
-di_t pattern(di_t *p) {
-    di_t p1 = pattern1(p);
-    int l, c;
-    // Patterns with a binary operator
-    const char *ops[] = {"~", "@"};
-    for (int i = 0; i < 2; i++) {
-        if (try_token(p, &l, &c, ops[i])) {
-            di_t p2 = pattern1(p);
-            //di_t op = di_string_from_cstring(ops[i]);
-            p1 = mkpat(ops[i], l, c, "left", p1, "right", p2, NULL);
-            break;
-        }
-    }
-    return p1;
-}
-
-/* All other patterns */
-di_t pattern1(di_t *p) {
-    int l, c; // line and col
-    di_t pat;
-    if (is_token(p, "ident")) {
-        // variable
-        di_t name = get_token_data(p);
-        copy_token_pos(p, &l, &c);
-        pat = mkpat("var", l, c, "name", name, NULL);
-    } else if (is_token(p, "lit")) {
-        di_t value = get_token_data(p);
-        copy_token_pos(p, &l, &c);
-        pat = mkpat("lit", l, c, "value", value, NULL);
-    } else if (is_token(p, "regex")) {
-        di_t re = get_token_data(p);
-        copy_token_pos(p, &l, &c);
-        pat = mkpat("regex", l, c, "regex", re, NULL);
-    } else if (try_token(p, &l, &c, "[")) {
-        di_t elems = di_array_empty();
-        if (try_token(p, NULL, NULL, "]")) {
-            // empty array
-            fetch_next_token(p);
-        } else {
-            do {
-                di_t elem = pattern(p);
-                di_array_push(&elems, elem);
-            } while (try_token(p, NULL, NULL, ","));
-            eat(p, "]");
-        }
-        return mkpat("array", l, c, "elems", elems, NULL);
-    } else if (try_token(p, &l, &c, "{")) {
-        // Dict
-        di_t pairs = di_array_empty();
-        if (try_token(p, NULL, NULL, "}")) {
-            // empty dict
-        } else {
-            do {
-                di_t k = pattern(p);
-                eat(p, ":");
-                di_t v = pattern(p);
-                di_t pair = mkdict("key", k, "value", v, NULL);
-                di_array_push(&pairs, pair);
-            } while (try_token(p, NULL, NULL, ","));
-            eat(p, "}");
-        }
-        return mkpat("dict", l, c, "pairs", pairs, NULL);
-    } else if (try_token(p, NULL, NULL, "(")) {
-        pat = pattern(p);
-        eat(p, ")");
-        return pat;
-    } else {
-        error_unexpected_token(p, "pattern");
-    }
-    fetch_next_token(p);
-    return pat;
 }

@@ -134,6 +134,7 @@ static di_t create_pp(void) {
     di_t pp = di_dict_empty();
     di_t binops = di_array_empty();
     char * ops[] = {"and", "or", "<", ">", "≤", "≥", "≠", "==",
+        "=",
         "!=", "@", "~", "+", "-", "*", "/", "mod"};
     int i;
     for (i = 0; i < sizeof(ops) / sizeof(char *); i++) {
@@ -144,27 +145,16 @@ static di_t create_pp(void) {
 }
 
 static void expr(di_t pp, di_t e, int indent);
-static void pattern(di_t pp, di_t pat, int indent);
 
-static void pattern(di_t pp, di_t p, int indent) {
-    di_t op = di_dict_get(p, s("pat"));
-    if (di_equal(op, s("lit"))) {
-        di_t v = di_dict_get(p, s("value"));
-        di_t src = pp_literal(v);
-        ps(src);
-    } else if (di_equal(op, s("var"))) {
-        di_t name = di_dict_get(p, s("name"));
-        ps(name);
-    } else if (di_equal(op, s("regex"))) {
-        di_t regex = di_dict_get(p, s("regex"));
-        printf("/");
-        ps(regex);
-        printf("/");
-    } else {
-        printf("<unimplemented pattern>");
+static void exprs(di_t pp, di_t es, int indent) {
+    di_size_t n = di_array_length(es);
+    for (di_size_t i = 0; i < n; i++) {
+        if (i > 0) printf("\n");
+        if (indent > 0)
+            printf("%*s", indent, "");
+        di_t e = di_array_get(es, i);
+        expr(pp, e, indent);
     }
-    //printf("<pattern unimplemented>");
-    //expr(pp, pat, indent);
 }
 
 static void expr(di_t pp, di_t e, int indent) {
@@ -173,9 +163,17 @@ static void expr(di_t pp, di_t e, int indent) {
         di_t value = di_dict_get(e, s("value"));
         di_t src = pp_literal(value);
         ps(src);
+        di_cleanup(src);
     } else if (di_equal(op, s("var"))) {
         di_t name = di_dict_get(e, s("name"));
         ps(name);
+        di_cleanup(name);
+    } else if (di_equal(op, s("regex"))) {
+        di_t regex = di_dict_get(e, s("regex"));
+        printf("/");
+        ps(regex);
+        di_cleanup(regex);
+        printf("/");
     } else if (di_equal(op, s("array"))) {
         di_t elems = di_dict_get(e, s("elems"));
         int n = di_array_length(elems);
@@ -209,6 +207,18 @@ static void expr(di_t pp, di_t e, int indent) {
             }
             printf("}");
         }
+    } else if (di_equal(op, s("apply"))) {
+        di_t func = di_dict_get(e, s("func"));
+        di_t args = di_dict_get(e, s("args"));
+        expr(pp, func, indent);
+        printf("(");
+        di_size_t n = di_array_length(args);
+        for (di_size_t i = 0; i < n; i++) {
+            if (i > 0)
+                printf(",\n%*s", indent + 4, "");
+            expr(pp, di_array_get(args, i), indent + 8);
+        }
+        printf(")");
     } else if (di_equal(op, s("case"))) {
         di_t subj = di_dict_get(e, s("subj"));
         di_t alts = di_dict_get(e, s("alts"));
@@ -220,11 +230,11 @@ static void expr(di_t pp, di_t e, int indent) {
             di_t alt = di_array_get(alts, i);
             di_t pat = di_dict_get(alt, s("pat"));
             di_t exp = di_dict_get(alt, s("expr"));
-            printf("\n%*s", indent + 8, "");
-            pattern(pp, pat, indent + 8);
-            //printf(" ->\n%*s", indent + 16, "");
-            printf(" -> ");
-            expr(pp, exp, indent + 16);
+            printf("\n%*s", indent + 4, "");
+            expr(pp, pat, indent + 4);
+            printf(" ->\n%*s", indent + 8, "");
+            //printf(" -> ");
+            expr(pp, exp, indent + 8);
         }
         printf("\n%*s", indent, "");
     } else if (is_binop(pp, op)) {
@@ -236,10 +246,14 @@ static void expr(di_t pp, di_t e, int indent) {
     } else if (di_equal(op, s("if"))) {
         printf("if ");
         expr(pp, di_dict_get(e, s("cond")), indent + 3);
-        printf("\n%*sthen ", indent + 8, "");
-        expr(pp, di_dict_get(e, s("then")), indent + 13);
-        printf("\n%*selse ", indent + 8, "");
-        expr(pp, di_dict_get(e, s("else")), indent + 13);
+        printf("\n%*sthen ", indent + 4, "");
+        expr(pp, di_dict_get(e, s("then")), indent + 9);
+        printf("\n%*selse ", indent + 4, "");
+        expr(pp, di_dict_get(e, s("else")), indent + 9);
+    } else if (di_equal(op, s("do"))) {
+        printf("do\n");
+        exprs(pp, di_dict_get(e, s("seq")), indent + 4);
+        printf("\n");
     } else if (di_is_string(op)) {
         printf("<unimplemented expression: ");
         ps(op);
@@ -252,7 +266,9 @@ static void expr(di_t pp, di_t e, int indent) {
 }
 
 void di_prettyprint(di_t tree) {
+    assert(di_is_array(tree));
     di_t pp = create_pp();
-    expr(pp, tree, 0);
+    exprs(pp, tree, 0);
     printf("\n");
+    di_cleanup(pp);
 }

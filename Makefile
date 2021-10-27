@@ -1,7 +1,10 @@
-# apt install libyajl-dev
+CFLAGS += -Wall -std=c99 -pedantic $(EXTRA_CFLAGS)
+LDFLAGS += -lpcre $(EXTRA_LDFLAGS)
 
-CFLAGS += -Wall -std=c99 -pedantic
-LDFLAGS += -lpcre
+ifdef ASAN
+CFLAGS += -g -fsanitize=address
+LDFLAGS += -g -fsanitize=address
+endif
 
 .PHONY: all test clean
 
