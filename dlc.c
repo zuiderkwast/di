@@ -2,13 +2,14 @@
 #include "di.h"
 #include "di_lexer.h"
 #include "di_parser.h"
+#include "di_annotate.h"
 #include "di_prettyprint.h"
 #include "di_io.h"
 #include "di_debug.h"
 
 /*
 
-Lexer -> Layout processor -> Parser -> Type and variable access annotator -> Compiler
+Lexer -> Parser -> Type and variable access annotator -> Compiler
 
 */
 
@@ -25,7 +26,7 @@ static inline void debug_dump(const char *label, di_t token) {
 int main(int argc, char **argv) {
 	if (argc < 2) {
 		fprintf(stderr, "Usage: %s [COMMAND] FILENAME\n", argv[0]);
-		fprintf(stderr, "Commands: source, lex, parse, pp\n");
+		fprintf(stderr, "Commands: source, lex, parse, annotate, pp\n");
 		exit(1);
 	}
 	char *cmd, *fn;
@@ -43,7 +44,6 @@ int main(int argc, char **argv) {
 		debug_dump("Source: ", source);
 	} else if (!strcmp("lex", cmd)) {
 		di_t lexer = di_lexer_create(source);
-                //di_cleanup(source); // should be done by di_lexer_create(source);
 		debug_dump("Lexer: ", lexer);
 		di_t token = di_null();
 		di_t op;
@@ -58,6 +58,13 @@ int main(int argc, char **argv) {
 		di_t tree = di_parse(source);
 		printf("Parsing done.\n");
 		debug_dump("Parse tree: ", tree);
+                di_cleanup(tree);
+	} else if (!strcmp("annotate", cmd)) {
+		di_t tree = di_parse(source);
+		printf("Parsing done.\n");
+                tree = di_annotate(tree);
+		printf("Annotation done.\n");
+		debug_dump("Annotated parse tree: ", tree);
                 di_cleanup(tree);
 	} else if (!strcmp("pp", cmd)) {
 		di_t tree = di_parse(source);

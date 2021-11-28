@@ -97,8 +97,14 @@ di_t di_to_source(di_t value, int indent) {
         snprintf(buf, 80, "%*s}", indent, "");
         str = di_string_append_chars(str, buf, strlen(buf));
         return str;
+    } else if (di_is_undefined(value)) {
+        return di_string_from_cstring("(undefined)");
+    } else if (di_is_deleted(value)) {
+        return di_string_from_cstring("(deleted)");
+    } else if (di_is_empty(value)) {
+        return di_string_from_cstring("(empty)");
     }
-    assert(0); // not implemented for any other types
+    //assert(0); // not implemented for any other types
     return di_null();
 }
 

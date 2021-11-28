@@ -179,20 +179,20 @@ static void prepare_patterns(void) {
     if (word_re)
         return; /* already done */
     /* compile patterns */
-    word_re       = mk_re("[[:alpha:]$][\\w$]*");  // Conservative: "[a-z]+"
+    word_re       = mk_re("\\$?[\\w$]*");  // Conservative: "[a-z]+"
     operator_re   = mk_re("->|<=|=<|>=|≤|≥|==|!=|≠|[<>,:;=+*~@\\-{}\\[\\]()\\\\]");
     div_re        = mk_re("/");                    // Conflicts with regex_re
     regex_re      = mk_re("/(?:\\\\/|[^/\\n])*/"); // Conflicts with div_re
     string_re     = mk_re("\"(?:\\\\\"|[^\"\\n])*\"");
     num_re        = mk_re("-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][-+]?[0-9]+)?");
-    nl_re         = mk_re("(?:\\#.*?)?\\R");       // Any unicode newline sequence
+    nl_re         = mk_re("(?:(?:\\#|--).*?)?\\R");// Any unicode newline sequence
     spaces_re     = mk_re("\\h+");                 // Any horizontal space
 
     /* create dict of keywords */
     const char *keywords[] = {
         "case", "of", "let", "in", "do", "end",
         "if", "then", "else",
-        "and", "or", "not", "mod"
+        "and", "or", "not", "div", "mod"
     };
     int i;
     int n = sizeof(keywords) / sizeof(char *);
@@ -424,8 +424,8 @@ di_t di_lex(di_t * lexer_ptr, di_t old_token) {
 
     // Unmatched token
     fprintf(stderr,
-            "Unmatched character on line %d, column %d\n",
-            line, column);
+            "%d:%d: Unmatched character at \"%.3s...\"\n",
+            line, column, subject+start);
     exit(-1);
 
  found:

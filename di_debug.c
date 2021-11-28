@@ -38,7 +38,12 @@ void di_dump(di_t v, int indent) {
 			print_indent(indent);
 			printf("}");
 			return;
-		}
+		} else if (di_is_string(v)) {
+                    // Allocated string, printed by di_to_source below.
+		} else {
+                    printf("(Unknown value tag %#x)\n", d->tag);
+                    return;
+                }
 	}
 	di_t lit = di_to_source(v, indent); // json_encode(v);
 	printf("%.*s", di_string_length(lit), di_string_chars(lit));

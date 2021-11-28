@@ -6,7 +6,6 @@ Todo
 * Closure datatype (function reference)
 * IO file descriptor, stream, socket, etc. datatype
 * Binary type
-* Variable access annotator
 * Type annotator (as optimization)
 * Module metadata file, for access by other files
   * Exported functions with arity and possibly types
@@ -18,7 +17,7 @@ Todo
 * Compiling (multiple modules)
   * Generate header file
   * Generate C code
-  * Intermodular dependence inference (avoid need to detect cycles)
+  * Intermodular dependency check (avoid need to detect cycles)
   * Generate metadata for deps without compiling them with all their deps
   * Link main module with its (compiled) depencecies
   * Check remote function references (existence, arity)
@@ -34,6 +33,7 @@ Already done
 * Lexer, complete including layout rule
 * Parser, basic
 * Task, prototype
+* Annotate var binding, access and last access
 
 Parser todo/done
 ----------------
@@ -42,15 +42,15 @@ Parser todo/done
   * public/export declaration or attribute (todo)
   * import (todo?)
   * Definitions
-    * match (pattern = expr) done
-    * function def: basic (done, looks like apply on LHS)
-    * function def: join clauses (todo)
+    * function def: basic (done)
+    * function def: join clauses (done)
+    * function def: validation of patterns and expressions (todo)
   * Expression
+    * match (pattern = expr) done
     * Binop
-    * Unop (todo)
+    * Unop
     * Remote function identifier, e.g. ns::mod::func (todo)
     * Function application
-    * Function definition (todo)
     * Case
     * Do
     * If-then-else
@@ -69,8 +69,8 @@ Parser todo/done
     * Regex
       * Validation by PCRE compilation (todo)
       * Detect var bindings (todo)
-    * Binop (todo)
-      * Validate (one operand must be fixed size)
+    * Binop
+      * Validate one operand must be fixed size (todo)
     * Array
     * Dict
     * Dict update

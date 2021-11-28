@@ -1,5 +1,5 @@
 #include "di.h"
-
+#include "di_debug.h"
 #include <stdio.h>
 
 /*------------------------------------------*
@@ -251,7 +251,7 @@ di_t di_array_shift(di_t * aptr) {
 	assert(di_is_array(a));
 	aadeque_t * arr = (aadeque_t *)di_to_pointer(a);
 	if (arr->header.refc > 0)
-        arr = di_aadeque_clone(arr);
+		arr = di_aadeque_clone(arr);
 	di_t v = aadeque_shift(&arr);
 	di_decref(v);
 	*aptr = di_from_pointer((di_tagged_t *)arr);
@@ -357,6 +357,9 @@ di_t di_dict_set(di_t dict, di_t key, di_t value) {
 		// no-op
 		di_cleanup(key);
 		di_cleanup(value);
+                /* if (was_array && !di_is_array(value)) { */
+                /*     printf("%s:%d: Dict set destroyed array\n", __FILE__, __LINE__); */
+                /* } */
 		return dict;
 	}
 	// If there are any references to it, make a clone.
@@ -380,7 +383,7 @@ di_t di_dict_set(di_t dict, di_t key, di_t value) {
 }
 
 // Deletes the key if it exists. Returns the new dict.
-// FIXME free key if refc == 0 or make clear that we don't.
+// Frees key if its refcounter is zero.
 di_t di_dict_delete(di_t dict, di_t key) {
 	assert(di_is_dict(dict));
 	// Unbox
@@ -403,7 +406,35 @@ di_t di_dict_delete(di_t dict, di_t key) {
 	return dict;
 }
 
+// Deletes a key from a dict and returns the value which was associated with the
+// key or null if the dict didn't contain the key. Note that the dict is
+// provided as a pointer which is updated to point at the updated dict. To tell
+// if the key didn't exist or if it was mapped to the value null, compare the
+// size of the dict before and after.
+di_t di_dict_pop(di_t *dict, di_t key) {
+	assert(di_is_dict(*dict));
+	// Unbox
+	struct oaht *ht = (struct oaht *)di_to_pointer(*dict);
+	di_t old_value = oaht_get(ht, key, di_empty());
+	if (di_is_empty(old_value))
+		return di_null(); // no-op
+	// If there are any references to it, make a clone.
+	*dict = di_dict_clone_or_reuse(*dict);
+	// Unbox again
+	ht = (struct oaht *)di_to_pointer(*dict);
 
+        // Instead of deleting the key, replace the value with null to make sure
+        // this works inside a dict iteration.
+	ht = oaht_set(ht, key, di_null());
+	// Delete and Decref key and value
+	//ht = oaht_delete(ht, key);
+	//di_decref_and_free(key);
+	di_decref(old_value);
+
+	// Go back to boxed pointer.
+	*dict = di_from_pointer((di_tagged_t *)ht);
+	return old_value;
+}
 
 /*---------*
  * General *

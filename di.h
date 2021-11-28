@@ -50,7 +50,8 @@ typedef struct di_tagged {
 #define NANBOX_PREFIX di
 
 // Assert replacement
-#include "tressa.h"
+//#include "tressa.h"
+#include "assert.h"
 
 #include "nanbox.h"
 #include "nanbox_shortstring.h"
@@ -266,6 +267,13 @@ di_t di_dict_set(di_t dict, di_t key, di_t value);
 // memory of dict if its reference counter is zero. Also frees key if the
 // reference counter is zero.
 di_t di_dict_delete(di_t dict, di_t key);
+
+// Deletes a key from a dict and returns the value which was associated with the
+// key or null if the dict didn't contain the key. Note that the dict is
+// provided as a pointer which is updated to point at the updated dict. To tell
+// if the key didn't exist or if it was mapped to the value null, compare the
+// size of the dict before and after.
+di_t di_dict_pop(di_t *dict, di_t key);
 
 /*
  * A function to iterate over the keys and values. Start by passing pos = 0.

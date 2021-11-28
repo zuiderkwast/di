@@ -255,8 +255,8 @@ OAHT_NAME(_iter)(struct OAHT_PREFIX *a, OAHT_SIZE_T pos, OAHT_KEY_T *k, OAHT_VAL
 		if (OAHT_IS_EMPTY_KEY(a->els[pos].key) ||
 			OAHT_IS_DELETED_KEY(a->els[pos].key))
 			continue;
-		*k = a->els[pos].key;
-		*v = a->els[pos].value;
+		if (k) *k = a->els[pos].key;
+		if (v) *v = a->els[pos].value;
 		return pos + 1;
 	}
 	/* There are no more entries. */
